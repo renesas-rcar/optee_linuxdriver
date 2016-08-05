@@ -418,4 +418,6 @@ struct optee_msg_arg {
 /* Memory only shared with non-secure kernel */
 #define OPTEE_MSG_RPC_SHM_TYPE_KERNEL	1
 
+#define OPTEE_MSG_RPC_CMD_SHM_FREE	7
+
 #endif /* _OPTEE_MSG_H */

@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2014, STMicroelectronics International N.V.
+ * Copyright (c) 2015-2016, Renesas Electronics Corporation
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License Version 2 as
@@ -36,6 +37,7 @@
 #include "tee_debugfs.h"
 #include "tee_shm.h"
 #include "tee_supp_com.h"
+#include "../armtz/rcar_version.h"
 
 #define _TEE_CORE_FW_VER "1:0.1"
 
@@ -538,8 +540,8 @@ EXPORT_SYMBOL(tee_core_del);
 
 static int __init tee_core_init(void)
 {
-	pr_info("\nTEE Core Framework initialization (ver %s)\n",
-		_TEE_CORE_FW_VER);
+	pr_info("\nTEE Core Framework initialization (R-Car Rev.%s)\n",
+		VERSION_OF_RENESAS);
 	tee_init_debugfs();
 
 	return 0;
@@ -557,5 +559,5 @@ module_exit(tee_core_exit);
 MODULE_AUTHOR("STMicroelectronics");
 MODULE_DESCRIPTION("STM Secure TEE Framework/Core TEEC v1.0");
 MODULE_SUPPORTED_DEVICE("");
-MODULE_VERSION(_TEE_CORE_FW_VER);
+MODULE_VERSION(VERSION_OF_RENESAS);
 MODULE_LICENSE("GPL");

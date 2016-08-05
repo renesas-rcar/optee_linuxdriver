@@ -45,6 +45,7 @@
 #define TEE_RPC_FREE_TA		0x10000009
 #define TEE_RPC_FS		0x10000010
 #define TEE_RPC_LOAD_TA2	0x10000012
+#define TEE_RPC_RPMB_CMD	0x1000000A
 
 #include <linux/semaphore.h>
 

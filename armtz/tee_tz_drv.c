@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2014, STMicroelectronics International N.V.
+ * Copyright (c) 2015-2016, Renesas Electronics Corporation
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License Version 2 as
@@ -21,6 +22,7 @@
 #include <linux/time.h>
 #include <linux/jiffies.h>
 #include <linux/uuid.h>
+#include <linux/slab.h>
 
 #include <linux/tee_core.h>
 #include <linux/tee_ioc.h>
@@ -37,6 +39,7 @@
 #include "tee_tz_op.h"
 #include "tee_tz_priv.h"
 #include "handle.h"
+#include "rcar_version.h"
 
 #define _TEE_TZ_NAME "armtz"
 #define DEV (ptee->tee->dev)
@@ -59,6 +62,19 @@ static struct tee_tz *tee_tz;
 #define ioremap_cache	ioremap_cached
 #endif
 
+/*
+ * R-Car Specification definition
+ */
+
+/* Log Buffer Address (ioremap) */
+static int8_t *remaped_log_buffer = NULL;
+
+/* Constant definition */
+#define TEE_LOG_NS_BASE		(0x0407FEC000U)
+#define TEE_LOG_NS_SIZE		(81920U)
+#define LOG_NS_CPU_AREA_SIZE	(1024U)
+#define TEE_CORE_NB_CORE	(8U)
+#define TEE_RPC_DEBUG_LOG	(0x3F000000U)
 
 /*******************************************************************
  * Calling TEE
@@ -177,6 +193,44 @@ bad:
 	arg->ret = TEEC_ERROR_BAD_PARAMETERS;
 }
 
+static void debug_log_work_handler(struct work_struct *work)
+{
+	printk(KERN_ALERT "%s", (int8_t *)(&work[1]));
+	kfree(work);
+}
+
+static void handle_rpc_func_cmd_debug_log(struct optee_msg_arg *arg)
+{
+	struct optee_msg_param *params;
+	uint32_t cpu_id;
+	int8_t *p;
+	struct work_struct *work = NULL;
+	size_t logmsg_size;
+
+	if (arg->num_params == 1) {
+		params = OPTEE_MSG_GET_PARAMS(arg);
+		cpu_id = params[0].u.value.a;
+
+		if (cpu_id < TEE_CORE_NB_CORE) {
+			p = &remaped_log_buffer[cpu_id * LOG_NS_CPU_AREA_SIZE];
+			logmsg_size = strlen(p) + 1;
+			work = kmalloc(sizeof(*work) + logmsg_size, GFP_KERNEL);
+			if (work != NULL) {
+				strcpy((int8_t *)(&work[1]), p);
+				INIT_WORK(work, debug_log_work_handler);
+				schedule_work(work);
+			} else {
+				printk(KERN_ALERT "%s", p);
+			}
+			arg->ret = TEEC_SUCCESS;
+		} else {
+			arg->ret = TEEC_ERROR_BAD_PARAMETERS;
+		}
+	} else {
+		arg->ret = TEEC_ERROR_BAD_PARAMETERS;
+	}
+}
+
 static void handle_rpc_func_cmd_load_ta(struct tee_tz *ptee,
 			struct optee_msg_arg *arg)
 {
@@ -222,6 +276,46 @@ static void handle_rpc_func_cmd_load_ta(struct tee_tz *ptee,
 	return;
 bad_args:
 	arg->ret = TEEC_ERROR_GENERIC;
+}
+
+static void handle_rpc_func_cmd_rpmb(struct tee_tz *ptee,
+			struct optee_msg_arg *arg)
+{
+	struct optee_msg_param *optee_params;
+	struct tee_rpc_invoke inv;
+
+	arg->ret = TEEC_SUCCESS;
+	optee_params = OPTEE_MSG_GET_PARAMS(arg);
+	if (arg->num_params != 2) {
+		arg->ret = TEEC_ERROR_GENERIC;
+	}
+	if ((optee_params[0].attr & OPTEE_MSG_ATTR_TYPE_MASK) !=
+			OPTEE_MSG_ATTR_TYPE_TMEM_INPUT) {
+		arg->ret = TEEC_ERROR_GENERIC;
+	}
+	if ((optee_params[1].attr & OPTEE_MSG_ATTR_TYPE_MASK) !=
+			OPTEE_MSG_ATTR_TYPE_TMEM_OUTPUT) {
+		arg->ret = TEEC_ERROR_GENERIC;
+	}
+
+	if (arg->ret != TEEC_ERROR_GENERIC) {
+		(void)memset(&inv, 0, sizeof(inv));
+		inv.cmds[0].buffer = (void *)(uintptr_t)optee_params[0].u.tmem.buf_ptr;
+		inv.cmds[0].size = (uint32_t)optee_params[0].u.tmem.size;
+		inv.cmds[0].type = TEE_RPC_BUFFER;
+		inv.cmds[1].buffer = (void *)(uintptr_t)optee_params[1].u.tmem.buf_ptr;
+		inv.cmds[1].size = (uint32_t)optee_params[1].u.tmem.size;
+		inv.cmds[1].type = TEE_RPC_BUFFER;
+		inv.cmd = TEE_RPC_RPMB_CMD;
+		inv.res = TEEC_ERROR_NOT_IMPLEMENTED;
+		inv.nbr_bf = 2U;
+
+		(void)tee_supp_cmd(ptee->tee, TEE_RPC_ICMD_INVOKE, &inv, sizeof(inv));
+		arg->ret = inv.res;
+
+		optee_params[1].u.tmem.size = inv.cmds[1].size;
+		return;
+	}
 }
 
 static void handle_rpc_func_cmd_fs(struct tee_tz *ptee,
@@ -321,6 +415,35 @@ static void handle_rpc_func_cmd_shm_alloc(struct tee_tz *ptee,
 	arg->ret = TEEC_SUCCESS;
 }
 
+static void handle_rpc_func_cmd_shm_free(struct tee_tz *ptee,
+                        struct optee_msg_arg *arg)
+{
+	struct optee_msg_param *params = OPTEE_MSG_GET_PARAMS(arg);
+	struct tee_shm *shm;
+
+	arg->ret_origin = TEEC_ORIGIN_COMMS;
+
+	if (!arg->num_params ||
+	    params->attr != OPTEE_MSG_ATTR_TYPE_VALUE_INPUT) {
+		arg->ret = TEEC_ERROR_BAD_PARAMETERS;
+		return;
+	}
+
+
+	switch (params->u.value.a) {
+	case OPTEE_MSG_RPC_SHM_TYPE_APPL:
+	case OPTEE_MSG_RPC_SHM_TYPE_KERNEL:
+		break;
+	default:
+		arg->ret = TEEC_ERROR_BAD_PARAMETERS;
+		return;
+	}
+	shm = (struct tee_shm *)(unsigned long)params->u.value.b;
+	handle_rpc_free(ptee, shm);
+
+	arg->ret = TEEC_SUCCESS;
+}
+
 
 static void handle_rpc_func_cmd(struct tee_tz *ptee, struct optee_msg_arg *arg)
 {
@@ -337,14 +460,24 @@ static void handle_rpc_func_cmd(struct tee_tz *ptee, struct optee_msg_arg *arg)
 	case OPTEE_MSG_RPC_CMD_SHM_ALLOC:
 		handle_rpc_func_cmd_shm_alloc(ptee, arg);
 		break;
+	case OPTEE_MSG_RPC_CMD_SHM_FREE:
+		handle_rpc_func_cmd_shm_free(ptee, arg);
+		break;
 	case OPTEE_MSG_RPC_CMD_LOAD_TA:
 		handle_rpc_func_cmd_load_ta(ptee, arg);
 		break;
 	case OPTEE_MSG_RPC_CMD_FS:
 		handle_rpc_func_cmd_fs(ptee, arg);
 		break;
+	case OPTEE_MSG_RPC_CMD_RPMB:
+		handle_rpc_func_cmd_rpmb(ptee, arg);
+		break;
+	case TEE_RPC_DEBUG_LOG:
+		handle_rpc_func_cmd_debug_log(arg);
+		break;
 	default:
 		arg->ret = TEEC_ERROR_NOT_IMPLEMENTED;
+		break;
 	}
 }
 
@@ -1306,7 +1439,8 @@ static int __init tee_tz_init(void)
 {
 	int rc;
 
-	pr_info("TEE armv7 Driver initialization\n");
+	pr_info("TEE armv7 Driver initialization (R-Car Rev.%s)\n",
+		VERSION_OF_RENESAS);
 
 #ifdef _TEE_DEBUG
 	pr_debug("- Register the platform_driver \"%s\" %p\n",
@@ -1326,8 +1460,17 @@ static int __init tee_tz_init(void)
 		goto bail1;
 	}
 
+	remaped_log_buffer = ioremap_nocache(TEE_LOG_NS_BASE, TEE_LOG_NS_SIZE);
+	if (remaped_log_buffer == NULL) {
+		pr_err("failed to ioremap_nocache(TEE_LOG_NS_BASE)\n");
+		rc = -ENOMEM;
+		goto bail2;
+	}
+
 	return rc;
 
+bail2:
+	platform_device_unregister(&tz_0_plt_device);
 bail1:
 	platform_driver_unregister(&tz_tee_driver);
 bail0:
@@ -1349,4 +1492,4 @@ MODULE_AUTHOR("STMicroelectronics");
 MODULE_DESCRIPTION("STM Secure TEE ARMV7 TZ driver");
 MODULE_SUPPORTED_DEVICE("");
 MODULE_LICENSE("GPL");
-MODULE_VERSION("1.0");
+MODULE_VERSION(VERSION_OF_RENESAS);
