@@ -70,10 +70,9 @@ void tee_shm_free_from_rpc(struct tee_shm *shm)
 		return;
 	tee = shm->tee;
 	mutex_lock(&tee->lock);
-	if (shm->ctx == NULL) {
-		tee_dec_stats(&shm->tee->stats[TEE_STATS_SHM_IDX]);
-		list_del(&shm->entry);
-	}
+
+	tee_dec_stats(&shm->tee->stats[TEE_STATS_SHM_IDX]);
+	list_del(&shm->entry);
 
 	tee_shm_free(shm);
 	mutex_unlock(&tee->lock);
@@ -117,7 +116,7 @@ struct tee_shm *tee_shm_alloc(struct tee *tee, size_t size, uint32_t flags)
 
 	ret = sg_alloc_table_from_pages(&shm->sgt, &page,
 			nr_pages, 0, nr_pages * PAGE_SIZE, GFP_KERNEL);
-	if (IS_ERR_VALUE(ret)) {
+	if (IS_ERR_VALUE((uint64_t)ret)) {
 		dev_err(_DEV(tee), "%s: sg_alloc_table_from_pages() failed\n",
 				__func__);
 		tee->ops->free(shm);
@@ -270,6 +269,10 @@ static void _tee_shm_dma_buf_release(struct dma_buf *dmabuf)
 	struct tee_shm *shm = dmabuf->priv;
 	struct tee_context *ctx;
 	struct tee *tee;
+	struct tee_shm *shm_l = NULL;
+	struct list_head *pshm;
+	struct device *dev = shm->dev;
+	uint32_t find = 0;
 
 	tee = shm->ctx->tee;
 
@@ -280,7 +283,27 @@ static void _tee_shm_dma_buf_release(struct dma_buf *dmabuf)
 		 __func__, shm, (void *)shm->paddr, (int)shm->size_req,
 		 (int)shm->size_alloc, current->comm, current->pid);
 
-	tee_shm_free_io(shm);
+	mutex_lock(&tee->lock);
+	if (!list_empty(&tee->list_rpc_shm)) {
+		list_for_each(pshm, &tee->list_rpc_shm) {
+			shm_l = list_entry(pshm, struct tee_shm, entry);
+			if (shm_l->paddr == shm->paddr) {
+				find = 1;
+				break;
+			}
+		}
+	}
+	mutex_unlock(&tee->lock);
+
+	if (0 == find) {
+		tee_shm_free_io(shm);
+	} else {
+		tee_shm_free(shm);
+		tee_put(ctx->tee);
+		tee_context_put(ctx);
+		if (dev)
+			put_device(dev);
+	}
 
 	OUTMSG(0);
 }
@@ -487,7 +510,6 @@ found:
 	}
 
 	shm->ctx = ctx;
-	list_move(&shm->entry, &ctx->list_shm);
 
 	shm->dev = get_device(_DEV(tee));
 	ret = tee_get(tee);

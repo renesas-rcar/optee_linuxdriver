@@ -26,6 +26,7 @@
 
 #include <linux/tee_core.h>
 #include <linux/tee_ioc.h>
+#include <linux/suspend.h>
 
 #include <tee_shm.h>
 #include <tee_supp_com.h>
@@ -68,6 +69,8 @@ static struct tee_tz *tee_tz;
 
 /* Log Buffer Address (ioremap) */
 static int8_t *remaped_log_buffer = NULL;
+
+static int32_t smc_req_count = 0;
 
 /* Constant definition */
 #define TEE_LOG_NS_BASE		(0x0407FEC000U)
@@ -541,6 +544,7 @@ static void call_tee(struct tee_tz *ptee,
 	reg_pair_from_64(&param.a1, &param.a2, parg);
 
 	e_lock_teez(ptee);
+	smc_req_count++;
 	while (true) {
 		param.a0 = funcid;
 
@@ -565,6 +569,7 @@ static void call_tee(struct tee_tz *ptee,
 			break;
 		}
 	}
+	smc_req_count--;
 	e_unlock_teez(ptee);
 
 	switch (ret) {
@@ -1211,6 +1216,44 @@ out:
 	return ret;
 }
 
+/*
+ * It makes no sense to go into suspend while the OP-TEE is running.
+ */
+static int tz_rcar_suspend(void)
+{
+	int ret;
+
+	if (smc_req_count == 0) {
+		ret = NOTIFY_DONE;
+	} else {
+		pr_err("Linux cannot be suspended while the OP-TEE is in use\n");
+		ret = notifier_from_errno(-EBUSY);
+	}
+
+	return ret;
+}
+
+static int tz_rcar_power_event(struct notifier_block *this,
+			unsigned long event, void *ptr)
+{
+	int ret;
+
+	switch (event) {
+	case PM_SUSPEND_PREPARE:
+		ret = tz_rcar_suspend();
+		break;
+	default:
+		ret = NOTIFY_DONE;
+		break;
+	}
+
+	return ret;
+}
+
+static struct notifier_block tz_rcar_power_notifier = {
+	.notifier_call = tz_rcar_power_event,
+};
+
 
 /******************************************************************************/
 
@@ -1376,6 +1419,12 @@ static int tz_tee_probe(struct platform_device *pdev)
 	if (ret)
 		goto bail1;
 
+	ret = register_pm_notifier(&tz_rcar_power_notifier);
+	if (ret) {
+		pr_err("failed to register the pm_notifier (ret=%d)\n", ret);
+		goto bail1;
+	}
+
 #ifdef _TEE_DEBUG
 	pr_debug("- tee=%p, id=%d, iminor=%d\n", tee, tee->id,
 		 tee->miscdev.minor);
@@ -1402,11 +1451,15 @@ static int tz_tee_remove(struct platform_device *pdev)
 		 tee, tee->id, tee->miscdev.minor, tee->name);
 #endif
 
+	unregister_pm_notifier(&tz_rcar_power_notifier);
+	pr_info("%s: unregister tz_rcar_power_event function\n", __func__);
+
 /*	ptee = tee->priv;
 	tee_get_status(ptee);*/
 
 	tz_tee_deinit(pdev);
 	tee_core_del(tee);
+	pr_info("%s: end\n", __func__);
 	return 0;
 }
 
