@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2014, STMicroelectronics International N.V.
+ * Copyright (c) 2017, Renesas Electronics Corporation
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -253,7 +254,7 @@ typedef struct {
 	char devname[256];
 	union {
 		struct tee_context *ctx;
-		int fd;
+		uintptr_t fd;
 	};
 } TEEC_Context;
 
@@ -409,7 +410,7 @@ typedef union {
  * and a trusted application.
  */
 typedef struct {
-	int fd;
+	uintptr_t fd;
 } TEEC_Session;
 
 /**

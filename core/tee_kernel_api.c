@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2014, STMicroelectronics International N.V.
+ * Copyright (c) 2017, Renesas Electronics Corporation
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License Version 2 as
@@ -69,7 +70,7 @@ TEEC_Result TEEC_InitializeContext(const char *name, TEEC_Context *context)
 	ctx->usr_client = 0;
 
 	/* TODO fixme will not work on 64-bit platform */
-	context->fd = (int)(uintptr_t)ctx;
+	context->fd = (uintptr_t)ctx;
 	BUG_ON(ctx != (struct tee_context *)(uintptr_t)context->fd);
 
 	pr_cont("%s: < ctx=%p is created\n", __func__, (void *)ctx);
@@ -141,7 +142,7 @@ TEEC_Result TEEC_OpenSession(TEEC_Context *context,
 	} else {
 		*return_origin = cmd.origin;
 		/* TODO fixme will not work on 64-bit platform */
-		session->fd = (int)(uintptr_t)sess;
+		session->fd = (uintptr_t)sess;
 		BUG_ON(sess != (struct tee_session *)(uintptr_t)session->fd);
 		return cmd.err;
 	}
