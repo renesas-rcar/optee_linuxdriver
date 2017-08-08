@@ -442,6 +442,8 @@ int tee_shm_alloc_io(struct tee_context *ctx, struct tee_shm_io *shm_io)
 		}
 
 		shm->flags |= TEEC_MEM_DMABUF;
+	} else {
+		shm_io->buffer = (void *)shm;
 	}
 
 	shm->ctx = ctx;

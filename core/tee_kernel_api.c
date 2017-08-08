@@ -227,9 +227,9 @@ TEEC_Result TEEC_AllocateSharedMemory(TEEC_Context *context,
 
 	shared_memory->registered = 0;
 	shared_memory->flags = shm_io.flags;
-	shared_memory->d.fd = shm_io.fd_shm;
+	shm = (struct tee_shm *)shm_io.buffer;
 
-	shm = (struct tee_shm *)(long)shm_io.fd_shm;
+	shared_memory->d.ptr = (void *)shm;
 	shared_memory->buffer = shm->kaddr;
 
 	pr_debug("%s(%d) => fd=%d, kaddr=%p\n", __func__,
@@ -248,10 +248,10 @@ void TEEC_ReleaseSharedMemory(TEEC_SharedMemory *shared_memory)
 
 	pr_debug("%s (vaddr = %p)\n", __func__, shared_memory->buffer);
 
-	shm = (struct tee_shm *)(long)shared_memory->d.fd;
+	shm = (struct tee_shm *)(long)shared_memory->d.ptr;
 	tee_shm_free_io(shm);
 
 	shared_memory->buffer = NULL;
-	shared_memory->d.fd = 0;
+	shared_memory->d.ptr = NULL;
 }
 EXPORT_SYMBOL(TEEC_ReleaseSharedMemory);
